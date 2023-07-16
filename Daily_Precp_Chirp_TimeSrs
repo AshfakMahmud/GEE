@@ -1,0 +1,96 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var shape = ee.FeatureCollection("users/ashfakmahmud20/Szarvas_boundary");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var roi = ee.FeatureCollection(shape)
+ 
+
+var startDate = ee.Date('2020-10-01');
+var endDate = ee.Date('2021-12-31');
+
+// // Specify Country names
+// var worldcountries = ee.FeatureCollection('FAO/GAUL/2015/level2');
+
+// var filterCountry = ee.Filter.eq('ADM2_NAME', 'Kurgantepa district');
+
+// var country = worldcountries.filter(filterCountry);
+
+
+Map.addLayer(roi);
+Map.centerObject(roi, 10);
+
+var dataset = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+  .filterDate(startDate, endDate);
+
+var list_dataset = dataset.toList(dataset.size());
+
+print(list_dataset);
+
+var getPrecipitation = function(image) {
+
+  var value_precipit = ee.Image(image)
+    .reduceRegion(ee.Reducer.first(), roi)
+    .get('precipitation');
+  
+  var precipit_mm = ee.Number(value_precipit); 
+
+  return precipit_mm;
+};
+
+var count = dataset.size();
+
+var precipit_list = dataset.toList(count).map(getPrecipitation);
+
+print("precipitation list", precipit_list);
+
+var allDates = ee.List(dataset.aggregate_array('system:time_start'));
+
+var allDatesSimple = allDates.map(function(date){
+  return ee.Date(date).format().slice(0,10);
+  });
+
+print(allDatesSimple);
+
+var len = precipit_list.size();
+
+print(len);
+
+var paired = allDatesSimple.zip(precipit_list);
+
+print (paired);
+
+var title = {
+  title: 'Daily precipitation',
+  hAxis: {title: 'Time'},
+  vAxis: {title: 'Precipitation (mm)'},
+};
+
+var chartDaily = ui.Chart.image.seriesByRegion({
+  imageCollection: dataset, 
+  regions: roi,
+  reducer: ee.Reducer.mean(),
+  band: 'precipitation',
+  scale: 5000,
+  xProperty: 'system:time_start',
+  seriesProperty: 'SITE'
+}).setOptions(title)
+  .setChartType('ColumnChart');
+
+print(chartDaily);
+
+var myFeatures = ee.FeatureCollection(paired.map(function(el){
+  el = ee.List(el); // cast every element of the list
+  var geom = roi;
+  return ee.Feature(null, {
+    'date': ee.String(el.get(0)),
+    'value':ee.Number(el.get(1))
+  });
+}));
+
+//print(myFeatures);
+
+// Export features, specifying corresponding names.
+Export.table.toDrive(myFeatures,
+"precipitation", //my task
+"GEE_Folder", //my export folder
+"daily_precipit",  //file name
+"CSV");

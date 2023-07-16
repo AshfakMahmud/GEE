@@ -1,0 +1,79 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var polygon = /* color: #bf04c2 */ee.Geometry.Polygon(
+        [[[20.50425167144212, 46.88330827948349],
+          [20.501676750787823, 46.88688667105031],
+          [20.499101830133526, 46.88407090753693]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+
+// Filter Sentinel-1 collection by date and region
+var s1Collection = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filterBounds(polygon)
+  .filterDate('2020-01-01', '2020-12-31')
+  .select(['VV', 'VH']);
+
+// Calculate Sentinel-1 Cross Ratio
+var s1CrossRatio = s1Collection.map(function(image) {
+  var ratio = image.select('VV').divide(image.select('VH'));
+  return ratio.rename('CrossRatio').copyProperties(image, ['system:time_start']);
+});
+
+// Apply Savitzky-Golay filter to Sentinel-1 Cross Ratio
+var s1CrossRatioSmooth = s1CrossRatio.map(function(image) {
+  var filtered = image.reduceNeighborhood({
+    reducer: ee.Reducer.mean(),
+    kernel: ee.Kernel.square(5),
+  });
+  return filtered.copyProperties(image, ['system:time_start']);
+});
+
+// Filter Sentinel-2 collection by date, region, and cloud cover
+var s2Collection = ee.ImageCollection('COPERNICUS/S2')
+  .filterBounds(polygon)
+  .filterDate('2020-01-01', '2020-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 40))
+  .select(['B4', 'B8']);
+
+// Calculate Sentinel-2 NDVI
+var s2NDVI = s2Collection.map(function(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']);
+  return ndvi.rename('NDVI').copyProperties(image, ['system:time_start']);
+});
+
+// Create a chart of Sentinel-1 Cross Ratio timeseries with dots only
+var s1Chart = ui.Chart.image.seriesByRegion({
+  imageCollection: s1CrossRatioSmooth,
+  regions: polygon,
+  reducer: ee.Reducer.mean(),
+  scale: 10,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'Sentinel-1 Cross Ratio Timeseries',
+  vAxis: {title: 'Cross Ratio'},
+  hAxis: {title: 'Date'},
+  lineWidth: 0,
+  pointSize: 3,
+});
+
+// Create a chart of Sentinel-2 NDVI timeseries with dots only
+var s2Chart = ui.Chart.image.seriesByRegion({
+  imageCollection: s2NDVI,
+  regions: polygon,
+  reducer: ee.Reducer.mean(),
+  scale: 10,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'Sentinel-2 NDVI Timeseries',
+  vAxis: {title: 'NDVI'},
+  hAxis: {title: 'Date'},
+  lineWidth: 0,
+  pointSize: 3,
+});
+
+// Display the charts
+print(s1Chart);
+print(s2Chart);
+
+// Display the polygon on the map
+Map.centerObject(polygon, 12);
+Map.addLayer(polygon, {color: 'FF0000'}, 'Polygon');

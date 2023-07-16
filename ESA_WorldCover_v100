@@ -1,0 +1,35 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var roi = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[20.0851690140548, 47.881631348762234],
+          [20.0851690140548, 47.26646352797762],
+          [21.20852106483605, 47.26646352797762],
+          [21.20852106483605, 47.881631348762234]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// var roi = ee.FeatureCollection(shape)
+
+Map.centerObject(roi, 10);
+
+var dataset = ee.ImageCollection("ESA/WorldCover/v100").first().clip(roi);
+
+var visualization = {
+  bands: ['Map'],
+};
+
+// Map.centerObject(dataset);
+
+Map.addLayer(dataset, visualization, "Landcover");
+
+Export.image.toDrive({
+  image: dataset,
+  description: 'LC',
+  scale: 10,
+  region: roi,
+})

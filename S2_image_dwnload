@@ -1,0 +1,54 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var shape = ee.FeatureCollection("users/ashfakmahmud20/Tisza_Lake");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var roi  = ee.FeatureCollection(shape)
+print(roi)
+
+var s2 = ee.ImageCollection("COPERNICUS/S2_SR");
+
+// // Set the desired the start and end dates
+// var startdate = ee.Date('2015-05-01');
+// var enddate = ee.Date('2021-10-15');
+
+// //cloud mask
+s2 = s2.filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE',20));
+print(s2.first());
+
+var image= s2.filterBounds(roi).filterDate('2020-09-1', '2020-09-30')
+var dataset= image.select(['B8', 'B4', 'B3'])
+.first(dataset);
+
+print(dataset)
+
+Map.addLayer(dataset);
+
+Map.centerObject(roi, 10);
+
+// // Select  Sentinel 2  images  within  the  specified  time  and spatial range
+// var s2images = s2.filterDate(startdate, enddate)
+// .filterBounds(roi);
+
+//Export to drive
+// ({
+//   image: dataset.select(['B8', 'B4', 'B3']),
+//   description: 'Jan',
+//   scale: 10,
+//   region: roi,
+//   crs: 'EPSG:4326',
+//   fileFormat: 'GeoTIFF',
+// });
+
+// var link = dataset.getDownloadURL({
+//     scale: 10,
+//     region: roi,
+//     crs: 'EPSG:4326',
+//     fileFormat: 'GeoTIFF',
+//     });
+// print(link);
+
+Export.image.toDrive({
+  image: dataset,
+  description: 'Feb',
+  scale: 10,
+  region: roi,
+})

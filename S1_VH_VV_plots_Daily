@@ -1,0 +1,130 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var parcel = ee.FeatureCollection("users/ashfakmahmud20/MZ");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Change the offset by 1000
+// To export 1000 parcels at a time
+var parcel = ee.FeatureCollection(parcel.toList({count:387, offset:0}))
+// Date
+var start_date='2021-01-01';
+var end_date='2021-12-31';  
+
+// Get the number of parcels.
+var count_parcel = parcel.size();
+print('The number of parcel in a specific area : ', count_parcel);
+print(parcel)
+
+
+//visualize the fields
+var sugercane = ee.Image().byte().paint({
+ featureCollection: parcel,
+  color: 2,
+  width: 1
+});
+
+Map.addLayer(sugercane, {palette: ['red']}, 'Parcel');
+Map.centerObject(parcel, 8);
+
+// // Parcel 10-m internel buffer
+// var parcel = parcel.map(function(f) { return f.buffer(-10)});
+// var parcel = parcel.map(function(f) { return f.set({'bufferedarea' : f.area()}) }); 
+
+
+var S1 = ee.ImageCollection('COPERNICUS/S1_GRD_FLOAT')
+    .filterBounds(parcel)
+    .filterDate(start_date, end_date)
+    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+    .filter(ee.Filter.eq('instrumentMode', 'IW'))
+    .filter(ee.Filter.eq('resolution_meters', 10))
+    //.filter(ee.Filter.eq('orbitProperties_pass', 'ASCENDING'));
+
+// // Calculating VH polarization
+// var S1 = S1.map(function(image) { return image.addBands(image.select('VH').divide(image.select('VV')).rename('CR')) })
+
+ var S1 = S1.map(function(image) { return image.addBands(image.select('VV'))})
+
+// var S1= S1.select(['VH'])
+
+
+// Converting to Gamma naught
+var S1 = S1.map(function(image) {
+  return image.addBands(
+    image.select(0).subtract(image.select('angle').multiply(Math.PI/180.0).cos().log10().multiply(10.0)));
+})
+
+// Converting to db
+var S1_db = S1.map(function(image) {
+  var bands = image.bandNames().remove('angle');
+  var toDecibels = image.select(bands).log10().multiply(10);
+  return toDecibels.addBands(
+    image.select('angle').resample('bicubic')).set('system:time_start', image.get('system:time_start'));
+})
+
+//print(S1);
+//print(S1_db);
+
+var triplets = S1_db.map(function(image) {
+  return image.select('VV').reduceRegions({
+    collection: parcel.select(['Field_Name']), 
+    reducer: ee.Reducer.mean().setOutputs(['VV']), 
+    scale: 10,
+  })// reduceRegion doesn't return any output if the image doesn't intersect
+    // with the point or if the image is masked out due to cloud
+    // If there was no value found, we set NoData value -9999
+    .map(function(feature) {
+    var vv = ee.List([feature.get('VV'), -9999])
+      .reduce(ee.Reducer.firstNonNull())
+    return feature.set({'VV': vv, 'imageID': ee.String(image.id()).slice(17,25)})
+    })
+  }).flatten();
+  
+print(triplets.first())
+
+var format = function(table, rowId, colId) {
+  var rows = table.distinct(rowId); 
+  var joined = ee.Join.saveAll('matches').apply({
+    primary: rows, 
+    secondary: table, 
+    condition: ee.Filter.equals({
+      leftField: rowId, 
+      rightField: rowId
+    })
+  });
+        
+  return joined.map(function(row) {
+      var values = ee.List(row.get('matches'))
+        .map(function(feature) {
+          feature = ee.Feature(feature);
+          return [feature.get(colId), feature.get('VV')];
+        });
+      return row.select([rowId]).set(ee.Dictionary(values.flatten()));
+    });
+};
+
+var sentinelResults = format(triplets, 'Field_Name', 'imageID');
+
+
+
+// Create empty dictionary for each day of the year
+
+var keys = ee.List.sequence(0, 1999).map(function(day) {
+  var date = ee.Date.fromYMD(2017, 1, 1).advance(day, 'day')
+  return date.format('YYYYMMdd')
+})
+var values = ee.List.repeat(-9999, 2000)
+var emptyDict = ee.Dictionary.fromLists(keys, values)
+print(emptyDict)
+
+var sentinelResults = sentinelResults.map(function(f){
+  var properties = f.toDictionary()
+  return f.set(emptyDict.combine(properties))
+})
+
+
+Export.table.toDrive({
+    collection: sentinelResults,
+    description: 'VV',
+    folder: 'earthengine',
+    fileNamePrefix: 'VV',
+    fileFormat: 'CSV'
+})

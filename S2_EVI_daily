@@ -1,0 +1,240 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var points = ee.FeatureCollection("users/ashfakmahmud20/MZMBQ_EPSG4326");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+Map.addLayer(points)
+Map.centerObject(points, 14)
+//print(aoi);
+
+var timeField = 'system:time_start';
+
+var addVariables = function(image) {
+  // Compute time in fractional years since the epoch.
+  var date = ee.Date(image.get(timeField));
+  var years = date.difference(ee.Date('1970-01-01'), 'year');
+  // Return the image with the added bands.
+  return image
+    // Add a time band.
+    .addBands(ee.Image(years).rename('t').float())
+    // Add a constant band.
+    .addBands(ee.Image.constant(1));
+};
+
+// Cloud score
+// remove cloudy image
+var max_cloud_percent= 95;
+var sort_ascending = false;
+
+// Parameters for sentinel cloud score
+var cloudThresh = 20; //Ranges from 1-100. Lower value will mask more pixels out. Generally 10-30 works well with 20 being used most commonly 
+var cloudHeights = ee.List.sequence(200,10000,500); //Height of clouds is use to project cloud shadows
+var irSumThresh = 0.35; //Sum of IR bands to include as shadows within TDOM and the shadow shift method (lower number masks out less)
+var dilatePixels = 5; //Pixels to dilate around clouds
+var contractPixels = 1; //Pixels to reduce cloud mask and dark shadows by to reduce inclusion of single-pixel comission errors
+
+///////////////////////////////////////////
+// B / FUNCTIONS
+///////////////////////////////////////////
+
+var rescale = function(img, exp, thresholds) {
+    return img.expression(exp, {img: img})
+        .subtract(thresholds[0]).divide(thresholds[1] - thresholds[0]);
+  };
+
+function sentinelCloudScore(img) {
+  
+
+  // Compute several indicators of cloudyness and take the minimum of them.
+  var score = ee.Image(1);
+  
+  // Clouds are reasonably bright in the blue and cirrus bands.
+  score = score.min(rescale(img, 'img.blue', [0.1, 0.5]));
+  score = score.min(rescale(img, 'img.cb', [0.1, 0.3]));
+  score = score.min(rescale(img, 'img.cb + img.cirrus', [0.15, 0.2]));
+  
+  // Clouds are reasonably bright in all visible bands.
+  score = score.min(rescale(img, 'img.red + img.green + img.blue', [0.2, 0.8]));
+
+  
+  //Clouds are moist
+  var ndmi = img.normalizedDifference(['nir','swir1']);
+  score = score.min(rescale(ndmi, 'img', [-0.1, 0.1]));
+  
+  score = score.multiply(100).byte();
+ 
+  return img.addBands(score.rename('cloudScore'));
+}
+
+function projectShadows(cloudMask,image,cloudHeights){
+  var meanAzimuth = image.get('MEAN_SOLAR_AZIMUTH_ANGLE');
+  var meanZenith = image.get('MEAN_SOLAR_ZENITH_ANGLE');
+
+// Shadow mask 
+// Find dark pixels
+  var darkPixels = image.select(['nir','swir1','swir2']).reduce(ee.Reducer.sum()).lt(irSumThresh)
+    .focal_min(contractPixels).focal_max(dilatePixels)
+  ;//.gte(1);
+  
+    
+  //Get scale of image
+  var nominalScale = cloudMask.projection().nominalScale();
+
+  //Find where cloud shadows should be based on solar geometry
+  //Convert to radians , compute the sin of the cloud shadows.
+  var azR =ee.Number(meanAzimuth).multiply(Math.PI).divide(180.0).add(ee.Number(0.5).multiply(Math.PI ));
+  var zenR  =ee.Number(0.5).multiply(Math.PI ).subtract(ee.Number(meanZenith).multiply(Math.PI).divide(180.0));
+  
+  //Find the shadows
+  var shadows = cloudHeights.map(function(cloudHeight){
+    cloudHeight = ee.Number(cloudHeight);
+    
+    var shadowCastedDistance = zenR.tan().multiply(cloudHeight);//Distance shadow is cast
+    var x = azR.cos().multiply(shadowCastedDistance).divide(nominalScale).round();//X distance of shadow
+    var y = azR.sin().multiply(shadowCastedDistance).divide(nominalScale).round();//Y distance of shadow
+    return cloudMask.changeProj(cloudMask.projection(), cloudMask.projection().translate(x, y));
+  });
+
+  var shadowMask = ee.ImageCollection.fromImages(shadows).max();
+ 
+  //Create shadow mask
+  shadowMask = shadowMask.and(cloudMask.not());
+  shadowMask = shadowMask.and(darkPixels);
+  
+  var cloudShadowMask = shadowMask.or(cloudMask);
+  
+  image = image.updateMask(cloudShadowMask.not()).addBands(shadowMask.rename(['cloudShadowMask']));
+  return image;
+}
+
+//Function for wrapping the entire process to be applied across collection
+function wrapIt(img){
+  img = sentinelCloudScore(img);
+  var cloudMask = img.select(['cloudScore']).gt(cloudThresh)
+    .focal_min(contractPixels).focal_max(dilatePixels)
+
+  img = projectShadows(cloudMask,img,cloudHeights);
+  
+  return img;
+}
+
+// ADD AN "EVI" BAND
+function addEVI (img) {
+  var evi = img.expression(
+    '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+        'NIR': img.select('nir'),
+        'RED': img.select('red'),
+        'BLUE': img.select('blue')});
+  return img.addBands(evi.float().rename('EVI'));
+}
+
+//Function to add date
+var addDate = function(img){
+   var date = img.date().format('YYYYMMdd');
+   return img.set('date', ee.Number.parse(date));
+};
+
+var s2 = ee.ImageCollection('COPERNICUS/S2').filterDate('2018-01-01','2018-12-31')  //
+                 .filterMetadata('CLOUDY_PIXEL_PERCENTAGE',"less_than",max_cloud_percent)
+                 .filterBounds(points)
+                 .sort('system:time_start')
+var s2 = s2.map(addDate);
+//print(s2)
+
+var S2_noCloud = s2.map(function(img){
+    var t = img.select([ 'B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9','B10', 'B11','B12']).divide(10000);//Rescale to 0-1
+    t = t.addBands(img.select(['QA60']));
+    var out = t.copyProperties(img).copyProperties(img,['system:time_start']);
+       return out;
+          })
+    .select(['QA60', 'B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9','B10', 'B11','B12']
+    ,['QA60','cb', 'blue', 'green', 'red', 're1','re2','re3','nir', 'nir2', 'waterVapor', 'cirrus','swir1', 'swir2'])
+     .map(wrapIt);
+
+var S2_noCloud = S2_noCloud.map(addEVI);
+//print(S2_noCloud)
+var evi = s2.select("EVI"); 
+//print(S2_noCloud);
+
+var lsChart1 = ui.Chart.image.series(S2_noCloud.select('EVI'), points, ee.Reducer.mean(), 30)
+    .setChartType('ScatterChart')
+    .setOptions({
+      title: 'Sentinel-2 EVI time series for wheat field',
+      lineWidth: 0,
+      pointSize: 2,
+      vAxes: {
+        0: {title: 'EVI (-)'}
+      },
+      series: {
+        0: {targetAxisIndex: 0},
+        1: {targetAxisIndex: 0},
+        2: {targetAxisIndex: 0}
+      } 
+    });
+//print(lsChart1);
+
+
+
+var triplets = S2_noCloud.map(function(image) {
+  return image.select('EVI').reduceRegions({
+    collection: S2_noCloud.select(['Field_Name']), 
+    reducer: ee.Reducer.first().setOutputs(['EVI']), 
+    scale: 10,
+  })// reduceRegion doesn't return any output if the image doesn't intersect
+    // with the point or if the image is masked out due to cloud
+    // If there was no ndvi value found, we set the ndvi to a NoData value -9999
+    .map(function(feature) {
+    var evi = ee.List([feature.get('EVI'), -9999])
+      .reduce(ee.Reducer.firstNonNull())
+    return feature.set({'EVI': evi, 'imageID': image.id()})
+    })
+  }).flatten();
+  
+//print(triplets.first())
+
+var format = function(table, rowId, colId) {
+  var rows = table.distinct(rowId); 
+  var joined = ee.Join.saveAll('matches').apply({
+    primary: rows, 
+    secondary: table, 
+    condition: ee.Filter.equals({
+      leftField: rowId, 
+      rightField: rowId
+    })
+  });
+        
+  return joined.map(function(row) {
+      var values = ee.List(row.get('matches'))
+        .map(function(feature) {
+          feature = ee.Feature(feature);
+          return [feature.get(colId), feature.get('EVI')];
+        });
+      return row.select([rowId]).set(ee.Dictionary(values.flatten()));
+    });
+};
+
+var sentinelResults = format(triplets, 'Field_Name', 'imageID');
+
+var merge = function(table, rowId) {
+  return table.map(function(feature) {
+    var id = feature.get(rowId)
+    var allKeys = feature.toDictionary().keys().remove(rowId)
+    var substrKeys = ee.List(allKeys.map(function(val) { 
+        return ee.String(val).slice(0,8)}
+        ))
+    var uniqueKeys = substrKeys.distinct()
+    var pairs = uniqueKeys.map(function(key) {
+      var matches = feature.toDictionary().select(allKeys.filter(ee.Filter.stringContains('item', key))).values()
+      var val = matches.reduce(ee.Reducer.max())
+      return [key, val]
+    })
+    return feature.select([rowId]).set(ee.Dictionary(pairs.flatten()))
+  })
+}
+var sentinelMerged = merge(sentinelResults, 'Field_Name');
+
+Export.table.toDrive({
+    collection: sentinelMerged,
+    description: 'evi',
+    folder: 'earthengine',
+    fileNamePrefix: 'evi',
+    fileFormat: 'CSV'
+})

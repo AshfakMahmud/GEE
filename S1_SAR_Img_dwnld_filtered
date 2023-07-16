@@ -1,0 +1,98 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var shape = 
+    /* color: #d63000 */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[88.67444284915592, 25.39240451092882],
+          [88.67444284915592, 21.031939528648632],
+          [93.06897409915592, 21.031939528648632],
+          [93.06897409915592, 25.39240451092882]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+var roi= ee.FeatureCollection(shape)
+
+Map.centerObject(roi, 10);
+
+var collection = ee.ImageCollection('COPERNICUS/S1_GRD')
+        // .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+        .filter(ee.Filter.eq('instrumentMode', 'IW'))
+        // .select('VV')
+        .filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+        .filterDate('2020-01-01', '2021-01-30')
+        .filterBounds(roi);
+        
+print (collection);
+
+// var dataset= collection.select(['VH', 'VV'])
+// .first(dataset);
+
+// print(dataset)
+
+Map.addLayer(dataset);
+
+// Filter speckle noise
+var filterSpeckles1 = function(img) {
+  var vv = img.select('VV') //select the VV polarization band
+  var vv_smoothed = vv.focal_median(100,'circle','meters').rename('VV_Filtered') //Apply a focal median filter
+  return img.addBands(vv_smoothed) // Add filtered VV band to original image    
+}
+
+
+  var filterSpeckles2 = function(img) {
+  var vh = img.select('VH') //select the VV polarization band
+  var vh_smoothed = vh.focal_median(100,'circle','meters').rename('VH_Filtered') //Apply a focal median filter
+  return img.addBands(vh_smoothed) // Add filtered VV band to original image    
+}
+
+// Map speckle noise filter across collection. Result is same collection, with smoothed VV band added to each image
+collection = collection.map(filterSpeckles1).map(filterSpeckles2)
+
+var dataset = collection.first().select(['VH_Filtered','VV_Filtered']);
+
+//Add speckle filtered image to map to sompare with raw SAR image
+// Map.addLayer(dataset.first(),{bands: 'VV_Filtered',min: -18, max: 0}, 'Filtered SAR image')
+
+// // Functions to convert to linear
+// var image_db = collection.first();
+// var image_linear = ee.Image(10).pow(image_db.multiply(0.1));
+
+// print(image_linear);
+
+// //RVI
+// var RVI = image_linear.expression('(4*VH) / (VV+VH)' , {
+//   'VV' : image_linear.select('VV'),
+//   'VH' : image_linear.select('VH')
+// }).rename('RVI')
+// print (RVI);
+
+
+// Map.addLayer(RVI, {min: 0, max: 1, palette: ['black', 'yellow', 'green']} , "RVI");
+
+Export.image.toDrive
+({
+  image: dataset,
+  description: 'Feb',
+  scale: 10,
+  region: roi,
+})
+
+// Export.image.toDrive({
+//   image: dataset,
+//   description: 'Jan',
+//   scale: 10,
+//   region: roi,
+//   maxPixels: 1e5
+// });
+
+// print('Multi-band GeoTIFF file wrapped in a zip file',
+//   collection.getDownloadURL({
+//     name: 'multi_band',
+//     bands: ['VH_Filtered','VV_Filtered'],
+//     region: roi,
+//     scale: 100,
+//     filePerBand: false
+//   }));

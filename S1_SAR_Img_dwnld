@@ -1,0 +1,46 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var shape = ee.FeatureCollection("users/ashfakmahmud20/Tisza_Lake");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+var roi= ee.FeatureCollection(shape)
+
+Map.centerObject(roi, 10);
+
+var collection = ee.ImageCollection('COPERNICUS/S1_GRD')
+        // .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+        .filter(ee.Filter.eq('instrumentMode', 'IW'))
+        // .select('VV')
+        .filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+        .filterDate('2020-01-01', '2020-01-30')
+        .filterBounds(roi);
+        
+print (collection);
+
+var dataset= collection.select(['VH', 'VV'])
+.first(dataset);
+
+print(dataset)
+
+Map.addLayer(dataset);
+// // Functions to convert to linear
+// var image_db = collection.first();
+// var image_linear = ee.Image(10).pow(image_db.multiply(0.1));
+
+// print(image_linear);
+
+// //RVI
+// var RVI = image_linear.expression('(4*VH) / (VV+VH)' , {
+//   'VV' : image_linear.select('VV'),
+//   'VH' : image_linear.select('VH')
+// }).rename('RVI')
+// print (RVI);
+
+
+// Map.addLayer(RVI, {min: 0, max: 1, palette: ['black', 'yellow', 'green']} , "RVI");
+
+Export.image.toDrive({
+  image: dataset,
+  description: 'Feb',
+  scale: 10,
+  region: roi,
+})
